@@ -22,6 +22,11 @@ USERS = {
     "diana": ("712020:5f898611-d58b-4568-90db-1fc4b7895bb3", "Diana")
 }
 
+ISSUE_TYPES = {
+    "uloha": "\u00daloha",
+    "pouloha": "Pod\u00faloha"
+}
+
 @app.route("/")
 def index():
     return send_from_directory("static", "index.html")
@@ -32,12 +37,14 @@ def create_ticket():
     summary = data.get("summary", "")
     description = data.get("description", summary)
     priority = data.get("priority", "Medium")
-    issue_type = data.get("issueType", "\u00daloha")
+    issue_type_key = data.get("issueType", "uloha")
     assignee_key = data.get("assignee", "")
     due_date = data.get("dueDate", "")
 
     if not summary:
-        return jsonify({"error": "Summary je povinné"}), 400
+        return jsonify({"error": "Summary je povinne"}), 400
+
+    issue_type = ISSUE_TYPES.get(issue_type_key, "\u00daloha")
 
     fields = {
         "project": {"key": PROJECT_KEY},
