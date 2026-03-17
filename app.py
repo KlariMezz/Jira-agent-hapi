@@ -32,7 +32,7 @@ def create_ticket():
     summary = data.get("summary", "")
     description = data.get("description", summary)
     priority = data.get("priority", "Medium")
-    issue_type = data.get("issueType", "Úloha")
+    issue_type = data.get("issueType", "\u00daloha")
     assignee_key = data.get("assignee", "")
     due_date = data.get("dueDate", "")
 
