@@ -1,53 +1,48 @@
 #!/bin/bash
 
+# Pouzitie: bash install_jira_agent.sh vas@email.com VAS_API_TOKEN
+
+EMAIL="$1"
+TOKEN="$2"
+
 echo ""
 echo "╔══════════════════════════════════════╗"
-echo "║      Jira Agent HAPI — Inštalácia    ║"
+echo "║      Jira Agent HAPI — Instalacia    ║"
 echo "╚══════════════════════════════════════╝"
 echo ""
 
-# Stiahni agenta
+if [ -z "$EMAIL" ] || [ -z "$TOKEN" ]; then
+    echo "Chyba: Zadaj email a token ako parametre."
+    echo "Pouzitie: bash install_jira_agent.sh vas@email.com VAS_TOKEN"
+    exit 1
+fi
+
+echo "Overujem ucet..."
+RESPONSE=$(curl -s -u "$EMAIL:$TOKEN" "https://dius-team.atlassian.net/rest/api/3/myself")
+ACCOUNT_ID=$(echo "$RESPONSE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('accountId',''))" 2>/dev/null)
+DISPLAY_NAME=$(echo "$RESPONSE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('displayName',''))" 2>/dev/null)
+
+if [ -z "$ACCOUNT_ID" ]; then
+    echo "Chyba: Neplatny email alebo token."
+    exit 1
+fi
+
+echo "Prihlaseny ako: $DISPLAY_NAME"
+echo ""
+
 AGENT_DIR="$HOME/JiraAgent"
 mkdir -p "$AGENT_DIR"
 
-echo "Sťahujem agenta..."
-curl -s "https://raw.githubusercontent.com/KlariMezz/Jira-agent-hapi/main/jira_agent.py" -o "$AGENT_DIR/jira_agent.py"
+python3 << PYEOF
+import os
 
-if [ ! -f "$AGENT_DIR/jira_agent.py" ]; then
-    echo "Chyba: nepodarilo sa stiahnuť agenta."
-    exit 1
-fi
+email = "$EMAIL"
+token = "$TOKEN"
+account_id = "$ACCOUNT_ID"
+display_name = "$DISPLAY_NAME"
+agent_dir = os.path.expanduser("$AGENT_DIR")
 
-echo ""
-echo "Zadaj svoj Jira email:"
-read -r JIRA_EMAIL
-
-echo ""
-echo "Zadaj svoj Jira API token"
-echo "(vygeneruj na: https://id.atlassian.com/manage-profile/security/api-tokens):"
-read -r -s JIRA_TOKEN
-echo ""
-
-# Zisti account ID
-echo "Overujem účet..."
-ACCOUNT_ID=$(curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
-    "https://dius-team.atlassian.net/rest/api/3/myself" | \
-    python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('accountId',''))" 2>/dev/null)
-
-if [ -z "$ACCOUNT_ID" ]; then
-    echo "Chyba: nepodarilo sa overiť účet. Skontroluj email a token."
-    exit 1
-fi
-
-DISPLAY_NAME=$(curl -s -u "$JIRA_EMAIL:$JIRA_TOKEN" \
-    "https://dius-team.atlassian.net/rest/api/3/myself" | \
-    python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('displayName',''))" 2>/dev/null)
-
-echo "Prihlásený ako: $DISPLAY_NAME ✓"
-
-# Vytvor personalizovaný agent s údajmi používateľa
-cat > "$AGENT_DIR/jira_agent.py" << PYEOF
-import requests
+code = '''import requests
 import json
 import re
 import unicodedata
@@ -55,10 +50,10 @@ from requests.auth import HTTPBasicAuth
 from datetime import datetime, date, timedelta
 
 JIRA_URL = "https://dius-team.atlassian.net"
-JIRA_EMAIL = "$JIRA_EMAIL"
-JIRA_TOKEN = "$JIRA_TOKEN"
-MY_ACCOUNT_ID = "$ACCOUNT_ID"
-MY_NAME = "$DISPLAY_NAME"
+JIRA_EMAIL = "''' + email + '''"
+JIRA_TOKEN = "''' + token + '''"
+MY_ACCOUNT_ID = "''' + account_id + '''"
+MY_NAME = "''' + display_name + '''"
 PROJECT_KEY = "HAPI"
 
 auth = HTTPBasicAuth(JIRA_EMAIL, JIRA_TOKEN)
@@ -68,21 +63,17 @@ USERS = {
     "klara": {"id": "712020:966280a2-82c9-40e9-b8ee-e03532a35e93", "name": "Klara"},
     "emma":  {"id": "712020:ba7ea612-9b67-4e16-891c-646240208317", "name": "Emma"},
     "diana": {"id": "712020:5f898611-d58b-4568-90db-1fc4b7895bb3", "name": "Diana"},
-    "me":    {"id": MY_ACCOUNT_ID, "name": MY_NAME},
 }
 ISSUE_TYPES = {"uloha": "10373", "pouloha": "10374"}
 context = {"last_key": None}
 
 def search(jql):
-    r = requests.post(
-        f"{JIRA_URL}/rest/api/3/search/jql", auth=auth, headers=H,
-        json={"jql": jql, "maxResults": 20, "fields": ["summary","status","assignee","priority","duedate"]}
-    )
+    r = requests.post(f"{JIRA_URL}/rest/api/3/search/jql", auth=auth, headers=H,
+        json={"jql": jql, "maxResults": 20, "fields": ["summary","status","assignee","priority","duedate"]})
     return r.json().get("issues", []) if r.ok else []
 
 def format_issues(issues):
-    if not issues:
-        return "Nenasli sa ziadne tasky."
+    if not issues: return "Nenasli sa ziadne tasky."
     lines = []
     for i in issues:
         f = i["fields"]
@@ -91,8 +82,8 @@ def format_issues(issues):
         p = f.get("priority", {}).get("name", "?")
         due = f.get("duedate") or ""
         due_str = f"  [{due}]" if due else ""
-        lines.append(f"  {i['key']}  [{p}]  {f['summary'][:55]}  -> {a}  ({s}){due_str}")
-    return "\n".join(lines)
+        lines.append(f"  {i[\'key\']}  [{p}]  {f[\'summary\'][:55]}  -> {a}  ({s}){due_str}")
+    return "\\n".join(lines)
 
 def get_detail(key):
     r = requests.get(f"{JIRA_URL}/rest/api/3/issue/{key}", auth=auth, headers=H,
@@ -116,16 +107,10 @@ def get_detail(key):
             "due": f.get("duedate") or "", "comments": last_comments}
 
 def create_issue(summary, priority="Medium", assignee_key=None, due_date=None, type_key="uloha"):
-    fields = {
-        "project": {"key": PROJECT_KEY}, "summary": summary[:80],
-        "issuetype": {"id": ISSUE_TYPES.get(type_key, "10373")},
-        "priority": {"name": priority}
-    }
-    if assignee_key:
-        if assignee_key == "me":
-            fields["assignee"] = {"accountId": MY_ACCOUNT_ID}
-        elif assignee_key in USERS:
-            fields["assignee"] = {"accountId": USERS[assignee_key]["id"]}
+    fields = {"project": {"key": PROJECT_KEY}, "summary": summary[:80],
+              "issuetype": {"id": ISSUE_TYPES.get(type_key, "10373")}, "priority": {"name": priority}}
+    if assignee_key == "me": fields["assignee"] = {"accountId": MY_ACCOUNT_ID}
+    elif assignee_key in USERS: fields["assignee"] = {"accountId": USERS[assignee_key]["id"]}
     if due_date: fields["duedate"] = due_date
     r = requests.post(f"{JIRA_URL}/rest/api/3/issue", auth=auth, headers=H, json={"fields": fields})
     d = r.json()
@@ -150,21 +135,18 @@ def transition_issue(key, tid):
     return r.ok
 
 def strip_ac(s):
-    return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+    return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
 
 def parse_date(text):
     t = text.lower()
     today = date.today()
-    day_map = {"pondelok": 0, "monday": 0, "utorok": 1, "tuesday": 1,
-               "streda": 2, "wednesday": 2, "stvrtok": 3, "thursday": 3,
-               "piatok": 4, "friday": 4}
+    day_map = {"pondelok": 0, "monday": 0, "utorok": 1, "tuesday": 1, "streda": 2, "wednesday": 2, "stvrtok": 3, "thursday": 3, "piatok": 4, "friday": 4}
     for word, weekday in day_map.items():
         if word in t:
             days = (weekday - today.weekday()) % 7 or 7
             return (today + timedelta(days=days)).strftime("%Y-%m-%d")
-    if "zajtra" in t or "tomorrow" in t:
-        return (today + timedelta(days=1)).strftime("%Y-%m-%d")
-    m = re.search(r'(\d{1,2})[.\-/](\d{1,2})(?:[.\-/](\d{2,4}))?', text)
+    if "zajtra" in t or "tomorrow" in t: return (today + timedelta(days=1)).strftime("%Y-%m-%d")
+    m = re.search(r"(\\d{1,2})[.\\-/](\\d{1,2})(?:[.\\-/](\\d{2,4}))?", text)
     if m:
         day, month = int(m.group(1)), int(m.group(2))
         year = int(m.group(3)) if m.group(3) else today.year
@@ -174,9 +156,9 @@ def parse_date(text):
     return None
 
 def find_key(text):
-    m = re.search(r'HAPI[-\s]?(\d+)', text, re.IGNORECASE)
+    m = re.search(r"HAPI[-\\s]?(\\d+)", text, re.IGNORECASE)
     if m: return f"HAPI-{m.group(1)}"
-    if context["last_key"] and any(w in text.lower() for w in ["ho", "ten", "this", "it", "tuto", "tento", "posledny", "neho"]):
+    if context["last_key"] and any(w in text.lower() for w in ["ho", "ten", "this", "it", "tuto", "tento", "posledny"]):
         return context["last_key"]
     return None
 
@@ -184,7 +166,7 @@ def find_assignee(text):
     t = text.lower()
     for name in USERS:
         if name in t: return name
-    if any(w in t for w in ["mna", "mne", "moje", "mine", "mi", "ja", "seba", "mne"]): return "me"
+    if any(w in t for w in ["mna", "mne", "moje", "mine", "mi", "ja", "seba"]): return "me"
     return None
 
 def find_priority(text):
@@ -199,212 +181,153 @@ def extract_new_value(text, keywords):
     for kw in keywords:
         if kw in t:
             idx = t.find(kw) + len(kw)
-            value = text[idx:].strip().lstrip(":").strip().strip('"\'')
-            if value: return value
+            return text[idx:].strip().lstrip(":").strip().strip()\\'\\'"
     return None
 
 def interactive_create(summary):
-    print(f"\n  Vytváram task: \"{summary}\"")
-    print("\n  Priorita:")
-    print("    1 = High  |  2 = Medium  |  3 = Low")
+    print(f"\\n  Vytváram task: \\"{summary}\\"")
+    print("\\n  Priorita:  1 = High  |  2 = Medium  |  3 = Low")
     pc = input("  Vyber [1/2/3] (Enter = Medium): ").strip()
     priority = {"1": "High", "3": "Low"}.get(pc, "Medium")
-
-    print("\n  Asignee:")
-    print(f"    1 = Klara  |  2 = Emma  |  3 = Diana  |  4 = Ja ({MY_NAME})  |  5 = Nikto")
+    print(f"\\n  Asignee:  1 = Klara  |  2 = Emma  |  3 = Diana  |  4 = Ja ({MY_NAME})  |  5 = Nikto")
     ac = input("  Vyber [1/2/3/4/5] (Enter = Nikto): ").strip()
-    assignee_map = {"1": "klara", "2": "emma", "3": "diana", "4": "me"}
-    assignee_key = assignee_map.get(ac)
-
-    print("\n  Deadline (napr. 25.3.2026, piatok, zajtra)")
+    assignee_key = {"1": "klara", "2": "emma", "3": "diana", "4": "me"}.get(ac)
+    print("\\n  Deadline (napr. 25.3.2026, piatok, zajtra)")
     due_input = input("  Zadaj datum (Enter = preskocit): ").strip()
     due_date = parse_date(due_input) if due_input else None
-
-    print("\n  Typ:  1 = Uloha  |  2 = Pouloha")
+    print("\\n  Typ:  1 = Uloha  |  2 = Pouloha")
     tc = input("  Vyber [1/2] (Enter = Uloha): ").strip()
     type_key = "pouloha" if tc == "2" else "uloha"
-
-    if assignee_key == "me":
-        assignee_name = MY_NAME
-    else:
-        assignee_name = USERS.get(assignee_key, {}).get("name", "Nikto") if assignee_key else "Nikto"
-
-    print(f"\n  Nahlad:")
-    print(f"    Summary:  {summary}")
-    print(f"    Priorita: {priority}  |  Asignee: {assignee_name}  |  Deadline: {due_date or 'nenastaveny'}")
-    confirm = input("\n  Vytvorit? [Y/n]: ").strip().lower()
-    if confirm in ("n", "nie", "no"): return "Zrusene."
-
+    assignee_name = MY_NAME if assignee_key == "me" else (USERS.get(assignee_key, {}).get("name", "Nikto") if assignee_key else "Nikto")
+    print(f"\\n  Nahlad: {summary}  |  {priority}  |  {assignee_name}  |  {due_date or 'bez deadline'}")
+    if input("  Vytvorit? [Y/n]: ").strip().lower() in ("n","nie","no"): return "Zrusene."
     key = create_issue(summary, priority, assignee_key, due_date, type_key)
-    if key:
-        return (f"Vytvoreny: {key}  ->  {JIRA_URL}/browse/{key}\n"
-                f"  Priorita: {priority}  |  Asignee: {assignee_name}  |  Deadline: {due_date or 'nenastaveny'}")
-    return "Chyba pri vytvarani tasku."
+    return f"Vytvoreny: {key}  ->  {JIRA_URL}/browse/{key}" if key else "Chyba pri vytvarani."
 
 def parse_and_handle(text):
     t = text.lower()
     key = find_key(text)
 
-    if any(w in t for w in ["ukaz", "zobraz", "zoznam", "vsetky", "show", "list", "moje tasky", "co mam", "ake tasky", "ktore tasky"]):
+    if any(w in t for w in ["ukaz","zobraz","zoznam","vsetky","show","list","moje tasky","co mam","ake tasky"]):
         f = "all"
-        if any(w in t for w in ["moje", "mine", "mna", "co mam", "priradene mne", "moje tasky"]): f = "me"
+        if any(w in t for w in ["moje","mine","mna","co mam"]): f = "me"
         else:
-            for name in ["klara", "emma", "diana"]:
+            for name in ["klara","emma","diana"]:
                 if name in t: f = name; break
-        if any(w in t for w in ["hotov", "done", "dokoncen"]): f = "done"
-        elif any(w in t for w in ["in progress", "v rieseni", "nedokoncen", "rozpracovan"]): f = "in_progress"
-        elif any(w in t for w in ["todo", "to do", "nezacate", "nove"]): f = "todo"
+        if any(w in t for w in ["hotov","done","dokoncen"]): f = "done"
+        elif any(w in t for w in ["in progress","v rieseni","nedokoncen"]): f = "in_progress"
+        elif any(w in t for w in ["todo","to do","nezacate"]): f = "todo"
         jql_map = {
-            "me":    f'project={PROJECT_KEY} AND assignee="{MY_ACCOUNT_ID}" ORDER BY created DESC',
-            "klara": f'project={PROJECT_KEY} AND assignee="712020:966280a2-82c9-40e9-b8ee-e03532a35e93" ORDER BY created DESC',
-            "emma":  f'project={PROJECT_KEY} AND assignee="712020:ba7ea612-9b67-4e16-891c-646240208317" ORDER BY created DESC',
-            "diana": f'project={PROJECT_KEY} AND assignee="712020:5f898611-d58b-4568-90db-1fc4b7895bb3" ORDER BY created DESC',
-            "done":  f'project={PROJECT_KEY} AND status=Done ORDER BY updated DESC',
-            "in_progress": f'project={PROJECT_KEY} AND status="In Progress" ORDER BY updated DESC',
-            "todo":  f'project={PROJECT_KEY} AND status="To Do" ORDER BY created DESC',
-            "all":   f'project={PROJECT_KEY} ORDER BY created DESC',
+            "me":    f\'project={PROJECT_KEY} AND assignee="{MY_ACCOUNT_ID}" ORDER BY created DESC\',
+            "klara": \'project=HAPI AND assignee="712020:966280a2-82c9-40e9-b8ee-e03532a35e93" ORDER BY created DESC\',
+            "emma":  \'project=HAPI AND assignee="712020:ba7ea612-9b67-4e16-891c-646240208317" ORDER BY created DESC\',
+            "diana": \'project=HAPI AND assignee="712020:5f898611-d58b-4568-90db-1fc4b7895bb3" ORDER BY created DESC\',
+            "done":  "project=HAPI AND status=Done ORDER BY updated DESC",
+            "in_progress": "project=HAPI AND status=\\"In Progress\\" ORDER BY updated DESC",
+            "todo":  "project=HAPI AND status=\\"To Do\\" ORDER BY created DESC",
+            "all":   "project=HAPI ORDER BY created DESC",
         }
         return format_issues(search(jql_map.get(f, jql_map["all"])))
 
-    if any(w in t for w in ["vytvor", "pridaj task", "novy task", "create", "pridaj ulohu", "nova uloha", "zaloz task"]):
+    if any(w in t for w in ["vytvor","pridaj task","novy task","create","zaloz task"]):
         summary = text
-        for prefix in ["vytvor task", "vytvor ulohu", "pridaj task", "pridaj ulohu", "zaloz task", "vytvor", "pridaj", "create task", "create"]:
+        for prefix in ["vytvor task","vytvor ulohu","pridaj task","zaloz task","vytvor","pridaj","create"]:
             if prefix in t:
                 idx = t.find(prefix) + len(prefix)
                 summary = text[idx:].strip().lstrip(":").strip()
                 break
         sp = strip_ac(summary.lower())
-        for noise in ["tak s nazvom", "s nazvom", "s tymto nazvom", "nazvom", "s popisom"]:
+        for noise in ["tak s nazvom","s nazvom","nazvom","s popisom"]:
             if noise in sp:
                 idx = sp.find(noise) + len(noise)
                 summary = summary[idx:].strip().lstrip(":").strip()
-                sp = strip_ac(summary.lower())
                 break
-        if not summary: return "Aky task chces vytvorit? Napr. 'vytvor task opravit login'"
-        return interactive_create(summary)
+        return interactive_create(summary) if summary else "Aky task chces vytvorit?"
 
-    if any(w in t for w in ["komentar", "comment", "pridaj poznamku"]):
+    if any(w in t for w in ["komentar","comment","pridaj poznamku"]):
         target_key = key or context["last_key"]
+        if not target_key: return "Ku ktoremu tasku?"
         comment_text = text
-        for prefix in ["pridaj komentar k " + (target_key or ""), "komentar:", "comment:", "pridaj komentar", "pridaj poznamku"]:
-            if prefix.lower() in t:
-                idx = t.find(prefix.lower()) + len(prefix)
+        for prefix in ["pridaj komentar","komentar:","comment:"]:
+            if prefix in t:
+                idx = t.find(prefix) + len(prefix)
                 comment_text = text[idx:].strip().lstrip(":").strip()
                 break
-        if not target_key: return "Ku ktoremu tasku? Napr. 'pridaj komentar k HAPI-5: text'"
         ok = add_comment(target_key, comment_text)
-        return f"Komentar pridany k {target_key}." if ok else "Chyba pri pridavani komentara."
+        return f"Komentar pridany k {target_key}." if ok else "Chyba."
 
-    if any(w in t for w in ["oznac", "presun", "zmen status"]) or \
-       (any(w in t for w in ["hotov", "done", "dokoncen"]) and key) or \
-       any(w in t for w in ["in progress", "v rieseni", "rozpracuj"]):
+    if any(w in t for w in ["oznac","hotov","done","dokoncen","in progress","v rieseni"]) and (key or context["last_key"]):
         target_key = key or context["last_key"]
-        if not target_key: return "Ktory task? Napr. 'oznac HAPI-5 ako hotove'"
         status = "done"
-        if any(w in t for w in ["in progress", "v rieseni", "riesim", "rozpracuj"]): status = "in_progress"
-        elif any(w in t for w in ["otvoren", "reopen", "to do", "znova"]): status = "todo"
+        if any(w in t for w in ["in progress","v rieseni","rozpracuj"]): status = "in_progress"
+        elif any(w in t for w in ["otvoren","reopen","to do"]): status = "todo"
         transitions = get_transitions(target_key)
-        keywords = {"done": ["done","hotovo","dokoncene","closed","resolved"],
-                    "in_progress": ["in progress","v rieseni"], "todo": ["to do","open","backlog"]}
-        names = keywords.get(status, [status])
-        matched = next((tr for tr in transitions if tr["name"].lower() in names), None)
+        keywords = {"done": ["done","hotovo","dokoncene","closed","resolved"], "in_progress": ["in progress","v rieseni"], "todo": ["to do","open"]}
+        matched = next((tr for tr in transitions if tr["name"].lower() in keywords.get(status,[])), None)
         if not matched and transitions: matched = transitions[0]
         if matched:
             ok = transition_issue(target_key, matched["id"])
-            return f"{target_key} -> {matched['name']}" if ok else "Chyba pri zmene statusu."
-        return f"Dostupne prechody: {[tr['name'] for tr in transitions]}"
+            return f"{target_key} -> {matched[\'name\']}" if ok else "Chyba."
+        return f"Dostupne: {[tr[\'name\'] for tr in transitions]}"
 
-    edit_keywords = ["zmen", "uprav", "edit", "nastav", "aktualizuj", "prepis", "zmen nazov", "zmen znenie", "zmen prioritu", "zmen asignee", "zmen deadline"]
-    if any(w in t for w in edit_keywords):
+    if any(w in t for w in ["zmen","uprav","edit","nastav","aktualizuj","prepis"]):
         target_key = key or context["last_key"]
-        if not target_key: return "Ktory task? Napr. 'zmen HAPI-5 prioritu na High'"
+        if not target_key: return "Ktory task?"
         fields_to_update = {}
-        new_summary = extract_new_value(text, ["zmen znenie na", "zmen nazov na", "zmen popis na", "prepis na", "nastav nazov na"])
+        new_summary = extract_new_value(text, ["zmen znenie na","zmen nazov na","prepis na","nastav nazov na"])
         if new_summary: fields_to_update["summary"] = new_summary
-        new_priority = find_priority(text)
-        if new_priority and any(w in t for w in ["priorit", "high", "low", "medium"]): fields_to_update["priority"] = {"name": new_priority}
-        new_assignee = find_assignee(text)
-        if new_assignee and any(w in t for w in ["asignee", "priraden", "assign", "prirad"]):
-            if new_assignee == "me":
-                fields_to_update["assignee"] = {"accountId": MY_ACCOUNT_ID}
-            else:
-                fields_to_update["assignee"] = {"accountId": USERS[new_assignee]["id"]}
-        new_date = parse_date(text)
-        if new_date and any(w in t for w in ["deadline", "datum", "termin"]): fields_to_update["duedate"] = new_date
+        p = find_priority(text)
+        if p and any(w in t for w in ["priorit","high","low","medium"]): fields_to_update["priority"] = {"name": p}
+        a = find_assignee(text)
+        if a and any(w in t for w in ["asignee","priraden","assign","prirad"]):
+            fields_to_update["assignee"] = {"accountId": MY_ACCOUNT_ID if a == "me" else USERS[a]["id"]}
+        d = parse_date(text)
+        if d and any(w in t for w in ["deadline","datum","termin"]): fields_to_update["duedate"] = d
         if not fields_to_update:
-            p = find_priority(text)
             if p: fields_to_update["priority"] = {"name": p}
-            a = find_assignee(text)
-            if a:
-                if a == "me": fields_to_update["assignee"] = {"accountId": MY_ACCOUNT_ID}
-                else: fields_to_update["assignee"] = {"accountId": USERS[a]["id"]}
-            d = parse_date(text)
+            if a: fields_to_update["assignee"] = {"accountId": MY_ACCOUNT_ID if a == "me" else USERS[a]["id"]}
             if d: fields_to_update["duedate"] = d
-        if not fields_to_update:
-            return f"Nerozumel som co chces zmenit. Skus: 'zmen znenie HAPI-5 na Novy nazov'"
+        if not fields_to_update: return "Co chces zmenit? Napr: zmen znenie HAPI-5 na Novy nazov"
         ok = edit_issue(target_key, fields_to_update)
-        if ok:
-            changes = []
-            if "summary" in fields_to_update: changes.append(f"znenie -> \"{fields_to_update['summary']}\"")
-            if "priority" in fields_to_update: changes.append(f"priorita -> {fields_to_update['priority']['name']}")
-            if "assignee" in fields_to_update:
-                aid = fields_to_update["assignee"]["accountId"]
-                name = MY_NAME if aid == MY_ACCOUNT_ID else next((u["name"] for u in USERS.values() if u["id"] == aid), aid)
-                changes.append(f"asignee -> {name}")
-            if "duedate" in fields_to_update: changes.append(f"deadline -> {fields_to_update['duedate']}")
-            return f"{target_key} upraveny: {', '.join(changes)}"
-        return f"Chyba pri uprave {target_key}."
+        return f"{target_key} upraveny." if ok else "Chyba pri uprave."
 
     if key:
         d = get_detail(key)
         if not d: return f"Task {key} sa nenasiel."
-        lines = [f"\n  {d['key']}: {d['summary']}", f"  Status:   {d['status']}",
-                 f"  Priorita: {d['priority']}", f"  Asignee:  {d['assignee']}",
-                 f"  Deadline: {d['due'] or 'nenastaveny'}"]
+        lines = [f"\\n  {d[\'key\']}: {d[\'summary\']}", f"  Status:   {d[\'status\']}",
+                 f"  Priorita: {d[\'priority\']}", f"  Asignee:  {d[\'assignee\']}",
+                 f"  Deadline: {d[\'due\'] or \'nenastaveny\'}"]
         if d["comments"]: lines.append("  Komentare:"); lines.extend(d["comments"])
-        return "\n".join(lines)
+        return "\\n".join(lines)
 
-    return ("Nerozumel som. Skus napriklad:\n"
-            "  'ukaz moje tasky'\n"
-            "  'vytvor task opravit login'\n"
-            "  'co je HAPI-5'\n"
-            "  'zmen znenie HAPI-5 na Novy nazov'\n"
-            "  'zmen prioritu HAPI-5 na High'\n"
-            "  'oznac HAPI-5 ako hotove'\n"
-            "  'pridaj komentar k HAPI-5: text'")
+    return "Nerozumel som. Skus: ukaz moje tasky | vytvor task | co je HAPI-5 | oznac HAPI-5 ako hotove"
 
 def main():
-    print(f"\n=== Jira Agent HAPI ===  (prihlaseny: {MY_NAME})")
-    print("Rozpravaj sa prirodzene.")
-    print("  ukaz moje tasky | vytvor task | co je HAPI-5 | oznac HAPI-5 ako hotove | q = koniec\n")
+    print(f"\\n=== Jira Agent HAPI ===  (prihlaseny: {MY_NAME})")
+    print("Rozpravaj sa prirodzene.  q = koniec\\n")
     while True:
-        try:
-            user_input = input("Ty: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nDovidenia!"); break
+        try: user_input = input("Ty: ").strip()
+        except (EOFError, KeyboardInterrupt): print("\\nDovidenia!"); break
         if not user_input: continue
-        if user_input.lower() in ("q", "quit", "koniec", "exit"):
-            print("Dovidenia!"); break
-        response = parse_and_handle(user_input)
-        print(f"\nAgent:\n{response}\n")
+        if user_input.lower() in ("q","quit","koniec","exit"): print("Dovidenia!"); break
+        print(f"\\nAgent:\\n{parse_and_handle(user_input)}\\n")
 
 if __name__ == "__main__":
     main()
+'''
+
+with open(os.path.join(agent_dir, "jira_agent.py"), "w") as f:
+    f.write(code)
+print("Agent ulozeny.")
 PYEOF
 
-# Nainštaluj requests
 pip3 install requests -q 2>/dev/null
 
-# Nastav alias
 ALIAS_LINE="alias jira='python3 $AGENT_DIR/jira_agent.py'"
 if ! grep -q "alias jira=" ~/.zshrc 2>/dev/null; then
     echo "$ALIAS_LINE" >> ~/.zshrc
 fi
 source ~/.zshrc 2>/dev/null
 
-echo ""
-echo "✅ Hotovo! Agent nainštalovaný pre: $DISPLAY_NAME"
-echo ""
-echo "Spusti agenta príkazom:"
-echo "  jira"
-echo ""
+echo "Hotovo! Prihlaseny ako: $DISPLAY_NAME"
+echo "Spusti agenta: jira"
